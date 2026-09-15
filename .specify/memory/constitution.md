@@ -1,27 +1,30 @@
 <!--
 Sync Impact Report
 ==================
-Version change: (uninitialized template) → 1.0.0
-Bump rationale: Initial ratification of the project constitution (MAJOR baseline).
+Version change: 1.0.0 → 1.1.0
+Bump rationale: Materially re-scoped Principle I to prefer Kubebuilder/controller-runtime
+implementation patterns over Argo CD-specific/legacy ones, while keeping Argo CD conventions
+authoritative for the API surface and user-facing behavior (MINOR — expanded/clarified guidance,
+no principle removed).
 
-Modified principles: n/a (initial adoption)
-Added principles:
+Modified principles:
+  - I. Upstream Alignment & Argo CD Conventions → I. Argo CD API Alignment, Kubebuilder Implementation
+Added principles: none
+Added sections: none
+Removed sections: none
+
+Prior baseline (v1.0.0) principles:
   - I. Upstream Alignment & Argo CD Conventions
   - II. Kubernetes-Native API Design
   - III. Test-First (NON-NEGOTIABLE)
   - IV. Declarative Deployment & Least-Privilege RBAC
   - V. Observability & Operational Safety
-Added sections:
-  - Technical Constraints & Standards
-  - Development Workflow & Quality Gates
-  - Governance
-
-Removed sections: none
 
 Templates & guidance requiring review for alignment:
   - .specify/templates/plan-template.md (Constitution Check gate) — verify referenced sections
   - .specify/templates/spec-template.md — no change required
   - .specify/templates/tasks-template.md — no change required
+  - specs/001-progressive-sync-controller/plan.md — Structure Decision already Kubebuilder-aligned
 
 Follow-up TODOs: none
 -->
@@ -30,17 +33,23 @@ Follow-up TODOs: none
 
 ## Core Principles
 
-### I. Upstream Alignment & Argo CD Conventions
+### I. Argo CD API Alignment, Kubebuilder Implementation
 
-The project MUST follow Argo CD's established project structure, coding conventions, and API
-group semantics. The progressive sync behavior extracted from the ApplicationSet controller MUST
-preserve compatible semantics unless a divergence is explicitly documented and justified.
-Custom Resource Definitions, controllers, and manifests MUST use patterns consistent with the
-Argo CD ecosystem (label/annotation conventions, `argoproj.io`-style API grouping, and standard
-directory layout).
+Argo CD conventions are authoritative for the **API surface and user-facing behavior**: CRD
+`argoproj.io`-style API grouping, label/annotation conventions, `Application` integration, and
+installation-id tenancy. The progressive sync behavior extracted from the ApplicationSet controller
+MUST preserve compatible semantics unless a divergence is explicitly documented and justified.
 
-Rationale: Consumers and maintainers already understand Argo CD conventions; alignment lowers the
-adoption barrier and keeps a future path toward upstream contribution open.
+For the **controller implementation** — project structure, scaffolding, reconcile idioms, tooling,
+and code generation — the project MUST prefer current Kubebuilder / `controller-runtime` patterns
+over Argo CD-specific or legacy patterns. Where an Argo CD-specific approach carries technical debt
+or conflicts with modern Kubebuilder practice, the Kubebuilder approach MUST win unless a specific,
+documented reason requires otherwise.
+
+Rationale: Argo CD conventions on the API keep the controller a first-class, familiar Argo CD
+component with an open upstream-contribution path; Kubebuilder is newer and better maintained, so
+building on it for implementation avoids inheriting Argo CD's older controller patterns and
+technical debt.
 
 ### II. Kubernetes-Native API Design
 
@@ -89,12 +98,15 @@ make automated rollouts trustworthy.
 ## Technical Constraints & Standards
 
 - Language: Go, using the current Argo CD-supported Go toolchain version.
-- Framework: `controller-runtime` / Kubebuilder-style scaffolding for controllers and CRDs.
-- Code generation: CRD manifests, deepcopy functions, and RBAC MUST be generated from typed Go
-  API definitions and kept in sync with source (no hand-drift).
+- Framework: `controller-runtime` with Kubebuilder scaffolding and project layout for controllers
+  and CRDs. Kubebuilder conventions take precedence over Argo CD-specific implementation patterns.
+- Code generation: CRD manifests, deepcopy functions, and RBAC MUST be generated (via
+  `controller-gen`/Kubebuilder tooling) from typed Go API definitions and kept in sync with source
+  (no hand-drift).
 - Formatting & linting: code MUST pass `gofmt`/`goimports` and the project linter before merge.
-- Manifests: MUST be organized under a standard `manifests/` (or `install/`) layout consistent with
-  Argo CD, and MUST be installable via a single apply path.
+- Manifests: MUST be organized under a Kubebuilder-style layout (e.g., `config/` with an aggregated
+  installable path), installable via a single apply path; Argo CD packaging expectations are met at
+  the distribution layer rather than by adopting legacy Argo CD manifest patterns.
 - Multi-namespace discovery MUST be governed by explicit configuration (e.g., ConfigMap and/or
   flags), defaulting to safe, restricted scope.
 
@@ -104,8 +116,9 @@ make automated rollouts trustworthy.
 - CI MUST run build, unit tests, integration (envtest) tests, and lint; all MUST pass to merge.
 - Generated artifacts (CRDs, deepcopy, RBAC) MUST be regenerated and committed when API types
   change; a CI check SHOULD verify no drift.
-- Any deviation from Argo CD conventions or added complexity MUST be justified in the PR
-  description and reviewed against this constitution.
+- Any deviation from Argo CD **API** conventions, or any use of an Argo CD-specific implementation
+  pattern in preference to the modern Kubebuilder approach, or added complexity, MUST be justified in
+  the PR description and reviewed against this constitution.
 - Every new reconciliation feature MUST include documentation of its CRD fields and behavior.
 
 ## Governance
@@ -123,4 +136,4 @@ violates a principle MUST be justified or removed. Runtime development guidance 
 codebase (e.g., contributor docs and agent guidance files) and MUST remain consistent with this
 constitution.
 
-**Version**: 1.0.0 | **Ratified**: 2026-09-15 | **Last Amended**: 2026-09-15
+**Version**: 1.1.0 | **Ratified**: 2026-09-15 | **Last Amended**: 2026-09-15

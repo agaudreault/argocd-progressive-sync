@@ -8,12 +8,19 @@
 
 **Input**: User description: "Similar to how the gitops-promoter has a UI experience for the promotionStrategy, the progressive sync should also have a UI (https://github.com/argoproj-labs/gitops-promoter). The UI should contain the list of the sync (history) with the completion state, any ongoing sync state, and a list of the selected applications so the user can click on them and navigate to the Argo CD app. The UI should also contain a summary of the current ongoing operation and surface any conditions on the progressive sync."
 
+## Clarifications
+
+### Session 2026-09-15
+
+- Q: Should "wave" become the canonical user-facing term for a rollout grouping? → A: No — use "step" (the term Argo CD/ApplicationSet uses); "wave" is informal only.
+- Q: How should the UI present Applications that match the selector but are not assigned to any step? → A: As a distinct group styled like Argo CD "orphaned resources" (dimmed/ghosted with an informational-warning indicator), signalling they will not be rolled out.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - View current progressive sync status at a glance (Priority: P1)
 
 An operator opens the UI for a progressive sync and immediately sees a summary of what is happening
-now: whether a rollout is in progress, paused, or complete; which stage is active; and high-level
+now: whether a rollout is in progress, paused, or complete; which step is active; and high-level
 progress. This gives them confidence about the current state without inspecting raw resources.
 
 **Why this priority**: The primary reason to build a UI is to make the live state of a rollout
@@ -21,12 +28,12 @@ legible. Without the current-operation summary, the UI delivers no value over th
 MVP.
 
 **Independent Test**: With a progressive sync mid-rollout, open its UI view and confirm it shows the
-overall state, the active stage, and progress that matches the underlying resource status.
+overall state, the active step, and progress that matches the underlying resource status.
 
 **Acceptance Scenarios**:
 
 1. **Given** a progressive sync with an ongoing rollout, **When** the operator opens its UI, **Then**
-   a summary of the current operation (state, active stage, progress) is displayed.
+   a summary of the current operation (state, active step, progress) is displayed.
 2. **Given** a progressive sync with no active rollout, **When** the operator opens its UI, **Then**
    the summary indicates an idle/complete state.
 3. **Given** the underlying status changes, **When** the operator is viewing the UI, **Then** the
@@ -36,9 +43,13 @@ overall state, the active stage, and progress that matches the underlying resour
 
 ### User Story 2 - Browse selected Applications and navigate to Argo CD (Priority: P1)
 
-An operator sees the list of Applications currently selected/governed by the progressive sync, along
-with each Application's sync and health state, and can click an Application to navigate directly to
-that Application in the Argo CD UI.
+An operator sees the list of Applications currently selected/governed by the progressive sync,
+**grouped by the step each Application belongs to** so they can tell at a glance which Application is
+in which step, along with each Application's sync and health state, and can click an Application to
+navigate directly to that Application in the Argo CD UI. Applications that match the selector but are
+**not assigned to any step** are shown in a distinct group styled like Argo CD's "orphaned
+resources" (dimmed/ghosted with an informational-warning indicator), making it obvious they will not
+be rolled out.
 
 **Why this priority**: Understanding which Applications are in scope, and jumping to them in Argo CD,
 is core to operating and troubleshooting a rollout. It is essential alongside the status summary.
@@ -50,11 +61,14 @@ corresponding Argo CD Application view.
 **Acceptance Scenarios**:
 
 1. **Given** a progressive sync governing several Applications, **When** the operator opens the UI,
-   **Then** all selected Applications are listed with sync/health state.
+   **Then** all selected Applications are listed grouped by their step, each with sync/health state.
 2. **Given** the list of Applications, **When** the operator clicks an Application, **Then** they are
    taken to that Application's page in the Argo CD UI.
 3. **Given** membership changes (an Application is added or removed), **When** the operator views the
    list, **Then** it reflects the current governed set.
+4. **Given** an Application matches the selector but belongs to no step, **When** the operator opens
+   the UI, **Then** it appears in a distinct "unassigned" group styled like Argo CD orphaned
+   resources, visually indicating it will not be rolled out.
 
 ---
 
@@ -97,7 +111,7 @@ the relevant condition(s) with human-readable messages.
 
 1. **Given** a progressive sync reporting conditions, **When** the operator opens the UI, **Then**
    those conditions are displayed with their status and message.
-2. **Given** a rollout halted due to a failed stage, **When** the operator views conditions, **Then**
+2. **Given** a rollout halted due to a failed step, **When** the operator views conditions, **Then**
    the reason for the halt is clearly surfaced.
 3. **Given** a healthy, progressing rollout, **When** the operator views conditions, **Then** the UI
    indicates a normal/progressing state without spurious warnings.
@@ -124,9 +138,13 @@ the relevant condition(s) with human-readable messages.
 ### Functional Requirements
 
 - **FR-001**: UI MUST display a summary of the current operation for a progressive sync, including
-  overall state (progressing, paused, complete/idle), active stage, and progress.
-- **FR-002**: UI MUST list the Applications currently selected/governed by a progressive sync, each
-  with its sync and health state.
+  overall state (progressing, paused, complete/idle), active step, and progress.
+- **FR-002**: UI MUST list the Applications currently selected/governed by a progressive sync,
+  grouped by the step each Application belongs to, each with its sync and health state, so the
+  operator can see at a glance which Application is in which step.
+- **FR-002a**: UI MUST show Applications that match the selector but are not assigned to any step in a
+  distinct "unassigned" group, styled like Argo CD's orphaned-resources treatment (dimmed/ghosted with
+  an informational-warning indicator) to signal they will not be rolled out.
 - **FR-003**: UI MUST allow the operator to navigate from a listed Application to that Application's
   view in the Argo CD UI.
 - **FR-004**: UI MUST display a history of past rollouts for a progressive sync, each with a
@@ -153,7 +171,11 @@ the relevant condition(s) with human-readable messages.
 - **Rollout History Entry**: A record of a past (or in-progress) rollout for a progressive sync,
   including completion state and timing.
 - **Selected Application (view)**: An Argo CD Application governed by the progressive sync, shown with
-  its sync/health state and a navigation target into the Argo CD UI.
+  its sync/health state, the step it belongs to (or "unassigned"), and a navigation target into the
+  Argo CD UI.
+- **Step (view)**: A rollout grouping (as defined by feature 001) used to group the selected
+  Applications in the display. Applications selected but assigned to no step are presented as an
+  "unassigned" group.
 - **Condition (view)**: A reported condition on the progressive sync (type, status, reason, message)
   surfaced for diagnostics.
 
@@ -162,10 +184,13 @@ the relevant condition(s) with human-readable messages.
 ### Measurable Outcomes
 
 - **SC-001**: An operator can determine the current state of a progressive sync (progressing/paused/
-  complete, active stage, progress) from the UI within seconds of opening it, without inspecting raw
+  complete, active step, progress) from the UI within seconds of opening it, without inspecting raw
   resources.
 - **SC-002**: An operator can see all governed Applications and reach the corresponding Argo CD
   Application view in a single click, for 100% of existing, accessible Applications.
+- **SC-002a**: An operator can identify which step each selected Application belongs to, and can
+  distinguish selected-but-unassigned Applications, directly from the UI without inspecting raw
+  resources.
 - **SC-003**: An operator can review past rollouts and identify each one's completion state and when
   it occurred.
 - **SC-004**: When a rollout is halted or errored, the operator can identify the reason from the
@@ -182,7 +207,7 @@ the relevant condition(s) with human-readable messages.
   unless added later).
 - The experience is modeled conceptually on the GitOps Promoter UI for PromotionStrategy
   ([argoproj-labs/gitops-promoter](https://github.com/argoproj-labs/gitops-promoter)), adapted to
-  progressive sync concepts (stages, selected Applications, conditions, history).
+  progressive sync concepts (steps, selected Applications, conditions, history).
 - Navigation targets an existing Argo CD UI; the UI can resolve an Application's Argo CD location
   (namespace/instance aware) to build the link.
 - Rollout history is available from the controller's reported status/records; the retention depth and

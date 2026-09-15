@@ -37,11 +37,13 @@ This document resolves the unknowns needed to design the `ProgressiveSync` CRD `
 
 ## Decision 3: Tenancy validation via Argo CD installation id
 
-- **Decision**: The controller is bound to exactly one Argo CD installation id via configuration.
-  During selection it reads the `argocd.argoproj.io/installation-id` annotation on each candidate
-  Application and includes only those whose value matches the bound id. Applications missing the
-  annotation or with a mismatched value are excluded and surfaced in status. If the controller's
-  bound id cannot be determined, it fails safe and governs nothing.
+- **Decision**: The controller is bound to a default Argo CD installation id via configuration, and
+  a `ProgressiveSync` may optionally override it per-resource via `spec.selector.installationID`.
+  During selection the controller reads the `argocd.argoproj.io/installation-id` annotation on each
+  candidate Application and includes only those whose value matches the applicable id
+  (`spec.selector.installationID` when set, else the controller's configured bound id). Applications
+  missing the annotation or with a mismatched value are excluded and surfaced in status. If the
+  applicable id cannot be determined, it fails safe and governs nothing.
 - **Rationale**: Confirmed via Argo CD resource-tracking docs and `util/argo/resource_tracking.go`:
   when `installationID` is set in `argocd-cm`, Argo CD stamps managed resources with the
   `argocd.argoproj.io/installation-id` annotation to disambiguate multiple instances on one cluster.
@@ -58,7 +60,7 @@ This document resolves the unknowns needed to design the `ProgressiveSync` CRD `
 ## Decision 4: Status shape — phases, per-application status, conditions, history
 
 - **Decision**: `status` carries: `observedGeneration`, a top-level `phase`
-  (`Pending|Progressing|Paused|Healthy|Error`), `currentStepIndex`/`currentStepName`, a list of
+  (`Pending|Progressing|Healthy|Error` — no `Paused`), `currentStepIndex`/`currentStepName`, a list of
   `applicationStatuses` (application ref, assigned step, sync + health status, message), standard
   `conditions[]` (`type/status/reason/message/lastTransitionTime/observedGeneration`), timestamps
   (`startedAt`/`finishedAt`), and a bounded `history[]` of past rollouts with completion state.
@@ -71,18 +73,42 @@ This document resolves the unknowns needed to design the `ProgressiveSync` CRD `
 ## Decision 5: Success condition definition
 
 - **Decision**: Default success condition for a step = all Applications in the step have
-  `status.sync.status == Synced` **and** `status.health.status == Healthy`. Configurable in a later
-  iteration; v1 hardcodes Synced+Healthy with an optional per-step timeout that, when exceeded, sets
-  `Paused` with a reason (fail-safe; no auto-advance).
-- **Rationale**: Matches spec assumptions and ApplicationSet behavior; Principle V fail-safe.
+  `status.sync.status == Synced` **and** `status.health.status == Healthy`. v1 hardcodes
+  Synced+Healthy. If a step is not yet Synced+Healthy, the rollout stays `Progressing` and waits on
+  that step **indefinitely** — there is no separate `Paused` phase, no step timeout, and no rollback.
+- **Rationale**: Matches the clarified spec (FR-004) and ApplicationSet behavior; waiting rather than
+  timing out is the fail-safe default (Principle V) and keeps the state machine simple.
 
 ## Decision 6: Namespace scoping / multi-namespace discovery
 
-- **Decision**: Watched Application namespaces are configuration-driven (flag/ConfigMap, e.g.,
-  `--application-namespaces`), defaulting to the controller's own namespace. Supports both Argo CD
-  namespace install and dedicated-namespace multi-namespace install.
+- **Decision**: Two layers of namespace scoping:
+  1. **Controller-level (RBAC bound)**: the set of namespaces the controller is *allowed* to watch is
+     configuration-driven (flag/ConfigMap, e.g., `--application-namespaces`), defaulting to the
+     controller's own namespace. Supports Argo CD-namespace and dedicated-namespace installs.
+  2. **Per-resource (`spec.selector.namespace`)**: each ProgressiveSync chooses which namespaces
+     (within the allowed set) to coordinate Applications across, using a native Kubernetes
+     `metav1.LabelSelector` over `Namespace` objects. Omitted ⇒ only the ProgressiveSync's own
+     namespace. Namespaces resolved outside the controller's allowed set are ignored and surfaced.
+- **Security constraint (privilege boundary)**: Cross-namespace selection is a privileged operation
+  restricted by where the `ProgressiveSync` lives (modeled on Argo CD's apps-in-any-namespace trust
+  model):
+  - A `ProgressiveSync` created in the **controller's own namespace** (the
+    `progressive-sync-controller` namespace) MAY use `spec.selector.namespace` to govern Applications
+    in other namespaces.
+  - A `ProgressiveSync` created in **any other namespace** is restricted to **its own namespace
+    only**. Specifying `spec.selector.namespace` in that case is a **configuration error**: the
+    controller MUST NOT govern anything for that resource and MUST surface an `Error` phase with a
+    `ConfigurationError` condition (fail-safe), rather than silently ignoring the selector.
+  This prevents a tenant in a delegated namespace from reaching Applications outside their namespace.
 - **Rationale**: Principle IV (config-driven scope, both topologies, least privilege — RBAC scoped to
-  the watched namespaces). Detailed RBAC/manifest design is a later phase; no impact on CRD shape.
+  the allowed namespaces) and Principle V (fail-safe). The per-resource selector lets one controller
+  coordinate multi-namespace rollouts without widening RBAC beyond the configured bound, while the
+  privilege boundary ensures only the trusted controller namespace can author cross-namespace
+  rollouts. Watching across namespaces uses controller-runtime cache/`MultiNamespacedCacheBuilder`-
+  style scoping (Kubebuilder-native).
+- **Alternatives considered**: cluster-wide watch — rejected (violates least-privilege). Name-glob
+  patterns (e.g. `my-app-*`) — rejected in favor of native label selection only, which is standard
+  Kubernetes and Kubebuilder-idiomatic (no custom glob matching).
 
 ## Decision 7: Argo CD Application type usage
 

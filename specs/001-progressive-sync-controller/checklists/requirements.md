@@ -38,3 +38,8 @@
   planning per the project constitution.
 - Revised 2026-09-15 to add tenancy validation via Argo CD installation identity (User Story 5,
   FR-017–FR-020, SC-008–SC-009). Re-validated: all items still pass, no [NEEDS CLARIFICATION].
+- Clarified 2026-09-15 (Session): controller implementation prefers Kubebuilder/controller-runtime
+  over Argo CD-specific patterns; constitution amended to v1.1.0. The Kubebuilder/controller-runtime
+  mention in Clarifications/Assumptions is a deliberate, governance-mandated technical constraint
+  (treated like the Markdown constraint in feature 003), not incidental implementation leakage; the
+  "No implementation details" item remains satisfied for requirements/success-criteria content.

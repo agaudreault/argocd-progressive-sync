@@ -9,10 +9,15 @@
 Build a standalone Kubernetes controller that orchestrates the progressive (staged, health-gated)
 rollout of Argo CD `Application` resources — extracting the RollingSync behavior currently embedded
 in the ApplicationSet controller into its own controller and CRD. A `ProgressiveSync` custom
-resource selects a set of Applications via a label selector, groups them into ordered steps, and
+resource selects a set of Applications via a selector composed of a native label selector
+**`selector.application`** (Application labels), an optional native label selector
+**`selector.namespace`** (which namespaces to coordinate across — defaulting to the ProgressiveSync's
+own namespace), and an optional **`selector.installationID`** scoping field. It groups the selected Applications into ordered steps and
 triggers each step to sync only after the prior step reaches a success condition (Synced + Healthy),
-halting on failure. Tenancy is enforced by requiring every governed Application to carry the
-controller's bound Argo CD `argocd.argoproj.io/installation-id`. The first design phase (this plan)
+halting on failure.
+Tenancy is enforced by requiring every governed Application to carry the applicable Argo CD
+`argocd.argoproj.io/installation-id` — from `spec.selector.installationID` when set, otherwise the
+controller's configured bound id. The first design phase (this plan)
 focuses on the **CRD `spec` and `status`** shape; deployment manifests, RBAC, and reconciler
 implementation follow in later phases/tasks.
 
@@ -41,7 +46,10 @@ controller overhead; controller should comfortably govern hundreds of Applicatio
 
 **Constraints**: Least-privilege RBAC; idempotent, fail-safe reconciliation; namespace scope and
 bound installation id are configuration-driven; no modification of Application `spec` desired state
-(controller only triggers/gates syncs).
+(controller only triggers/gates syncs). **Privilege boundary**: cross-namespace selection
+(`spec.selector.namespace`) is allowed only for ProgressiveSyncs in the controller's own namespace;
+elsewhere it is restricted to its own namespace and specifying a namespace selector is a
+configuration error.
 
 **Scale/Scope**: v1 targets a single Argo CD installation per controller; multiple `ProgressiveSync`
 resources; hundreds of governed Applications across multiple watched namespaces.
@@ -57,7 +65,7 @@ Evaluated against `.specify/memory/constitution.md` v1.0.0:
 | I. Upstream Alignment & Argo CD Conventions | CRD uses `argoproj.io`-style grouping; RollingSync semantics preserved or divergence documented; standard repo layout | PASS — design mirrors ApplicationSet RollingSync; divergences recorded in research.md |
 | II. Kubernetes-Native API Design | Versioned CRD, selector-based Application integration, `status` subresource with `conditions` | PASS — `v1alpha1`, `spec.selector`, `status.conditions` (this phase's focus) |
 | III. Test-First (NON-NEGOTIABLE) | Unit + envtest integration coverage planned before impl | PASS — testing strategy defined; enforced at tasks/impl phase |
-| IV. Declarative Deployment & Least-Privilege RBAC | Full manifests (CRD, Deployment, SA, RBAC, ConfigMap); both topologies; config-driven scope | PASS (planned) — manifest/RBAC design deferred to later phase, no violation |
+| IV. Declarative Deployment & Least-Privilege RBAC | Full manifests (CRD, Deployment, SA, RBAC, ConfigMap); both topologies; config-driven scope; cross-namespace selection is a privilege reserved to the controller namespace | PASS (planned) — manifest/RBAC design deferred to later phase; privilege boundary strengthens least-privilege posture |
 | V. Observability & Operational Safety | Structured logs, metrics, Events; idempotent; fail-safe halt | PASS — status/conditions + fail-safe halting designed in; metrics/events in impl phase |
 
 **Result**: No violations. Complexity Tracking section left empty.

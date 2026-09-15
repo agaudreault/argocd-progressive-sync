@@ -42,29 +42,60 @@ spec:
               required: [selector, strategy]
               properties:
                 selector:
-                  description: Selects the Argo CD Applications governed by this ProgressiveSync.
+                  description: >-
+                    Selects the Argo CD Applications governed by this ProgressiveSync
+                    (app labels, namespace scope, and optional installation-id scoping).
                   type: object
                   properties:
-                    matchLabels:
+                    application:
+                      description: >-
+                        Native Kubernetes label selector over Application labels.
+                        Empty = all apps in scope.
                       type: object
-                      additionalProperties:
-                        type: string
-                    matchExpressions:
-                      type: array
-                      items:
-                        type: object
-                        required: [key, operator]
-                        properties:
-                          key: { type: string }
-                          operator: { type: string, enum: [In, NotIn, Exists, DoesNotExist] }
-                          values:
-                            type: array
-                            items: { type: string }
-                installationID:
-                  description: >-
-                    Overrides the controller's bound Argo CD installation id
-                    (argocd.argoproj.io/installation-id) for tenancy validation.
-                  type: string
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        matchExpressions:
+                          type: array
+                          items:
+                            type: object
+                            required: [key, operator]
+                            properties:
+                              key: { type: string }
+                              operator: { type: string, enum: [In, NotIn, Exists, DoesNotExist] }
+                              values:
+                                type: array
+                                items: { type: string }
+                    namespace:
+                      description: >-
+                        Native Kubernetes label selector over Namespace objects, choosing which
+                        namespaces to search for Applications. Omitted = only the ProgressiveSync's
+                        own namespace.
+                      type: object
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        matchExpressions:
+                          type: array
+                          items:
+                            type: object
+                            required: [key, operator]
+                            properties:
+                              key: { type: string }
+                              operator: { type: string, enum: [In, NotIn, Exists, DoesNotExist] }
+                              values:
+                                type: array
+                                items: { type: string }
+                    installationID:
+                      description: >-
+                        Optionally scopes selection to a specific Argo CD installation id
+                        (argocd.argoproj.io/installation-id). When empty, the controller's
+                        configured bound installation id applies.
+                      type: string
                 strategy:
                   type: object
                   required: [type]
@@ -105,7 +136,7 @@ spec:
                 observedGeneration: { type: integer, format: int64 }
                 phase:
                   type: string
-                  enum: [Pending, Progressing, Paused, Healthy, Error]
+                  enum: [Pending, Progressing, Healthy, Error]
                 message: { type: string }
                 currentStepIndex: { type: integer }
                 currentStepName: { type: string }
@@ -145,6 +176,6 @@ spec:
                     properties:
                       startedAt: { type: string, format: date-time }
                       finishedAt: { type: string, format: date-time }
-                      result: { type: string, enum: [Succeeded, Failed, Aborted] }
+                      result: { type: string, enum: [Completed, Superseded] }
                       message: { type: string }
                       revisionHash: { type: string }

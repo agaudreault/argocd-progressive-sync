@@ -8,6 +8,16 @@
 
 **Input**: User description: "I want to create a new kubernetes controller. It's role will be to manage the progressive sync of Argo CD application. This pattern is already implemented in the ApplicationSet controller, but the logic should be extracted to it's own controller. As part of this work, we need to define the CRD spec, and how it integrates with the Application. Usually, it is a common pattern to use a selector. The project should follow the standard Argo CD structure and golang preferences. It should contain manifest to deploy the controller, with all the rbac, configMap and other associated resources. It can be deployed in Argo CD namespace, or it can be deployed in it's own namespace and discover argo applications in multiple namespace."
 
+## Clarifications
+
+### Session 2026-09-15
+
+- Q: For the controller implementation, prefer Kubebuilder patterns or Argo CD-specific patterns? → A: Always prefer Kubebuilder (modern controller-runtime) patterns over Argo CD-specific/legacy ones. Argo CD conventions still govern the API surface (CRD grouping, Application integration, installation-id tenancy) and user-facing behavior, but implementation scaffolding, project layout, and controller idioms follow Kubebuilder. (Constitution amended to v1.1.0 accordingly.)
+- Q: When a new change arrives while a rollout is already in progress, what should the controller do? → A: Supersede — detect the new change candidate, wait for a configurable grace period, ensure the affected Applications have been refreshed by Argo CD, then supersede the in-flight rollout and restart from the first step (recording the prior rollout in history as `Superseded`). Mirrors the existing ApplicationSet progressive-sync behavior.
+- Q: When a step's Applications never reach Synced + Healthy, how long does the controller wait? → A: Wait indefinitely. There is no separate "Paused" state, no step timeout, and no rollback — the rollout simply stays in progress on the current step until the success condition is met (or a new change supersedes it).
+- Q: What are the valid completion results for a rollout (history entry)? → A: Only `Completed` (all steps succeeded) or `Superseded` (a new change replaced the in-flight rollout). There is no `Aborted`/`Failed` result (consistent with no timeout/no rollback).
+- Q: What is the cross-namespace privilege boundary for selecting Applications in other namespaces? → A: A ProgressiveSync may select Applications in namespaces other than its own ONLY when it resides in the controller's own namespace. A ProgressiveSync in any other namespace is restricted to its own namespace; if it specifies a namespace selector, that is a configuration error — the controller sets a `ConfigurationError` condition (phase `Error`) and governs no Applications (fail-safe).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Roll out changes to a group of Applications in ordered stages (Priority: P1)
@@ -16,8 +26,9 @@ A platform operator manages many Argo CD Applications that represent the same wo
 different targets (clusters, regions, or environments). Instead of letting all Applications sync at
 once when a change is detected, the operator wants the change to roll out in ordered stages — for
 example, sync one canary Application first, wait until it is healthy, then proceed to the next
-group, and finally to the rest. If any stage does not become healthy, the rollout must pause so the
-operator can intervene before the change reaches the remaining targets.
+group, and finally to the rest. If any stage does not become healthy, the rollout stops advancing and
+waits indefinitely on that step (no timeout, no rollback) so the operator can intervene before the
+change reaches the remaining targets.
 
 **Why this priority**: This is the core value of the feature. Without staged, health-gated
 rollouts across a selected set of Applications, the controller provides no benefit over normal Argo
@@ -65,7 +76,6 @@ and that adding/removing a matching label changes membership.
 3. **Given** a governed Application, **When** its labels change so it no longer matches, **Then** it
    is removed from the governed set.
 
----
 
 ### User Story 3 - Deploy the controller flexibly across namespaces (Priority: P2)
 
@@ -91,14 +101,23 @@ governs the intended Applications in each topology.
    namespaces.
 3. **Given** an installation, **When** the controller starts, **Then** it has exactly the
    permissions it needs and no more.
+4. **Given** a progressive sync resource created in the controller's own namespace, **When** it
+   specifies a namespace selector, **Then** it may govern matching Applications in other namespaces
+   within the controller's allowed scope.
+5. **Given** a progressive sync resource created in a namespace other than the controller's, **When**
+   it specifies a namespace selector, **Then** it is rejected as a configuration error and governs no
+   Applications.
+6. **Given** a progressive sync resource created in a namespace other than the controller's with no
+   namespace selector, **When** it is evaluated, **Then** it governs only Applications in its own
+   namespace.
 
 ---
 
 ### User Story 4 - Observe rollout progress and status (Priority: P2)
 
 An operator inspects a progressive sync resource to understand current rollout state: which stage is
-active, which Applications have synced, which are healthy, and whether the rollout is progressing,
-paused, or complete.
+active, which Applications have synced, which are healthy, and whether the rollout is progressing
+(including waiting on the current step) or complete.
 
 **Why this priority**: Visibility is critical for trust and troubleshooting, but the rollout logic
 itself (P1) must exist first for status to have meaning.
@@ -111,8 +130,8 @@ the rollout advances.
 
 1. **Given** an in-progress rollout, **When** the operator inspects the resource, **Then** status
    shows the active stage and per-Application sync/health progress.
-2. **Given** a halted rollout, **When** the operator inspects the resource, **Then** status
-   indicates the rollout is paused and why.
+2. **Given** a rollout waiting on a step whose Applications are not yet healthy, **When** the operator
+   inspects the resource, **Then** status shows it is still on that step and why it has not advanced.
 3. **Given** a completed rollout, **When** the operator inspects the resource, **Then** status
    reports completion.
 
@@ -155,14 +174,19 @@ only that installation's Applications are governed and the others are excluded a
   successfully-complete (or idle) state rather than erroring.
 - What happens when an Application is deleted mid-rollout? It should be removed from the governed set
   and must not block progression.
-- What happens when a stage never becomes healthy? Progression must halt indefinitely (subject to
-  configurable timeout behavior) rather than proceeding.
-- How does the system handle a new change arriving while a rollout is already in progress? The
-  behavior for restarting or superseding the in-flight rollout must be defined.
+- What happens when a stage never becomes healthy? The rollout waits on that stage indefinitely (no
+  timeout, no rollback) and never proceeds until the stage's success condition is met.
+- How does the system handle a new change arriving while a rollout is already in progress? It
+  supersedes the in-flight rollout: after a configurable grace period and once the affected
+  Applications are refreshed by Argo CD, it supersedes the current rollout and restarts from the
+  first step (prior rollout recorded in history as `Superseded`).
 - How does the system handle two progressive sync resources whose selectors overlap on the same
   Application? Conflicting ownership must be detected and surfaced rather than silently fighting.
 - What happens when the controller lacks permission to read or act on an Application in a watched
   namespace? It must surface a clear error and not partially apply changes.
+- What happens when a progressive sync resource outside the controller's namespace specifies a
+  namespace selector? It is a configuration error: the controller governs no Applications and
+  surfaces the misconfiguration, rather than escalating cross-namespace privilege.
 - How does the system behave if a governed Application is manually synced out-of-band during a
   rollout?
 - What happens when a selected Application carries no Argo CD installation identity, or an identity
@@ -182,12 +206,14 @@ only that installation's Applications are governed and the others are excluded a
   than requiring each Application to be named explicitly.
 - **FR-003**: System MUST sync the Applications in a stage only after the prior stage has reached a
   configured success condition (e.g., synced and healthy).
-- **FR-004**: System MUST halt progression to subsequent stages when a stage fails to meet its
-  success condition.
+- **FR-004**: System MUST NOT advance to subsequent stages until the current stage meets its success
+  condition; if the stage does not meet it, the System MUST wait indefinitely on that stage. There is
+  no separate paused state, no stage timeout, and no rollback.
 - **FR-005**: System MUST re-evaluate governed membership as Applications matching the selector are
   created, changed, or deleted.
 - **FR-006**: System MUST expose observable status including the active stage, per-Application
-  sync/health progress, and overall rollout state (progressing, paused, complete).
+  sync/health progress, and overall rollout state (progressing — including waiting on a step — or
+  complete).
 - **FR-007**: System MUST preserve semantics compatible with the progressive sync behavior currently
   implemented in the ApplicationSet controller, or explicitly document any intentional divergence.
 - **FR-008**: System MUST be deployable via provided declarative manifests that include the custom
@@ -205,8 +231,11 @@ only that installation's Applications are governed and the others are excluded a
   continuing to roll out changes.
 - **FR-015**: System MUST emit operational signals (events and metrics) sufficient to observe and
   troubleshoot rollouts.
-- **FR-016**: System MUST define behavior for a new change that arrives while a rollout is already
-  in progress.
+- **FR-016**: When a new change is detected for the governed Applications while a rollout is in
+  progress, the System MUST supersede the in-flight rollout: it MUST wait for a configurable grace
+  period and confirm the affected Applications have been refreshed by Argo CD before superseding the
+  current rollout and restarting from the first step, recording the prior rollout in history with
+  result `Superseded`.
 - **FR-017**: System MUST validate the Argo CD installation identity recorded on each candidate
   Application's metadata and include only Applications whose installation identity matches the Argo
   CD installation the controller is bound to.
@@ -217,6 +246,11 @@ only that installation's Applications are governed and the others are excluded a
   determined.
 - **FR-020**: System MUST ensure all Applications governed by a single progressive sync belong to
   the same Argo CD installation.
+- **FR-021**: System MUST enforce a cross-namespace privilege boundary: a progressive sync resource
+  MAY govern Applications in namespaces other than its own ONLY when it resides in the controller's
+  own namespace. A progressive sync resource in any other namespace MUST be restricted to its own
+  namespace; if it specifies a namespace selector, the System MUST treat it as a configuration error,
+  surface that error in status, and govern no Applications (fail-safe).
 
 ### Key Entities *(include if feature involves data)*
 
@@ -262,6 +296,9 @@ only that installation's Applications are governed and the others are excluded a
   others in 100% of cases.
 - **SC-009**: Every Application governed by a given progressive sync belongs to the same Argo CD
   installation, verifiable from the resource's status.
+- **SC-010**: A progressive sync resource created outside the controller's namespace never governs
+  Applications beyond its own namespace; specifying a namespace selector there results in a surfaced
+  configuration error and zero governed Applications in 100% of cases.
 
 ## Assumptions
 
@@ -279,6 +316,9 @@ only that installation's Applications are governed and the others are excluded a
   scope for safety.
 - The controller does not modify Application spec/desired state; it orchestrates when Applications
   are triggered to sync.
+- Controller implementation follows Kubebuilder/controller-runtime conventions (project layout,
+  scaffolding, reconcile idioms, code generation) in preference to Argo CD-specific/legacy patterns;
+  Argo CD conventions remain authoritative for the API surface and user-facing behavior only.
 - Coexistence with ApplicationSet's own progressive sync on the same Applications is out of scope for
   v1; a given Application is expected to be governed by only one progressive-sync mechanism.
 - Argo CD records an installation identity in Application metadata (e.g., a tracking/installation-id
