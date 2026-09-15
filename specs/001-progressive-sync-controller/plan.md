@@ -23,11 +23,17 @@ implementation follow in later phases/tasks.
 
 ## Technical Context
 
-**Language/Version**: Go 1.24 (current Argo CD-supported toolchain)
+**Language/Version**: Go 1.27 (latest stable toolchain)
 
 **Primary Dependencies**: `sigs.k8s.io/controller-runtime`, `k8s.io/apimachinery`, Kubebuilder-style
 scaffolding, `controller-gen` (CRD/deepcopy/RBAC generation); Argo CD `Application` types from
-`github.com/argoproj/argo-cd/v2/pkg/apis/application/v1alpha1` (typed or unstructured — see research).
+`github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1` (typed or unstructured — see research).
+
+**Reference implementation**: The RollingSync logic being extracted lives in the upstream Argo CD
+repo (local checkout `/Users/agaudreault/git/oss/agaudreault/argoproj/argo-cd`, module
+`github.com/argoproj/argo-cd/v3`) under `applicationset/progressivesync/progressive_sync.go` (the
+`Manager` type) and is wired into `applicationset/controllers/applicationset_controller.go`. See
+research.md Decision 2 for the function-to-task mapping.
 
 **Storage**: Kubernetes API server / etcd (CRD-backed state; no external datastore). Status and
 rollout history persisted on the `ProgressiveSync` resource `status`.

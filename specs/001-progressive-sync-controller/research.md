@@ -27,6 +27,28 @@ This document resolves the unknowns needed to design the `ProgressiveSync` CRD `
   step that fails to converge **halts** progression.
 - **Rationale**: Principle I requires preserving compatible semantics or documenting divergence.
   Operators already understand RollingSync, minimizing behavioral surprise.
+- **Reference implementation (source of truth for behavior)**: Local Argo CD checkout at
+  `/Users/agaudreault/git/oss/agaudreault/argoproj/argo-cd` (module `github.com/argoproj/argo-cd/v3`).
+  The RollingSync logic is a self-contained `Manager` in
+  `applicationset/progressivesync/progressive_sync.go`, wired into
+  `applicationset/controllers/applicationset_controller.go`. Function-to-task mapping:
+  - `PerformProgressiveSyncs` → reconcile driver (our T020) — top-level per-cycle orchestration.
+  - `buildAppDependencyList` / `labelMatchedExpression` / `getAppStep` → step grouping (our T017).
+  - `getAppsToSync` → which Apps in the current step to trigger; `SyncDesiredApplications` → sync
+    triggering (our T019).
+  - `UpdateApplicationSetApplicationStatus` / `UpdateApplicationSetApplicationStatusProgress` →
+    per-Application status + Synced/Healthy success evaluation (our T018/T021); note upstream uses
+    `ProgressiveSyncHealthy` and gates on `SyncStatusCodeSynced` + `HealthStatusHealthy`.
+  - `ensureApplicationsReconciled` / `checkAllApplicationsReconciled` / `needsReconcile` /
+    `addRefreshAnnotationToApplications` / `GetLatestWaitingTransitionTimeOfAppset` → the refresh
+    grace-period + "apps reconciled by Argo before proceeding" logic our supersede behavior mirrors
+    (our T049, FR-016; upstream `RefreshGracePeriodSeconds`).
+  - `IsRollingSyncStrategy` / `RollingSyncStrategyEnabled` / `IsStepsEmpty` → strategy/validation
+    guards (our T008 types + validation).
+- **Key divergence to preserve deliberately**: upstream operates on ApplicationSet-*generated*
+  Applications; our controller *selects pre-existing* Applications (no ownership) and adds
+  installation-id tenancy filtering (Decision 3) — the grouping/success/grace-period mechanics are
+  reused, but selection and ownership differ.
 - **Divergences (documented per Principle I)**:
   1. **Standalone selection**: ApplicationSet owns/generates its Applications; the standalone
      controller instead **selects pre-existing** Applications via `spec.selector` (it does not own or

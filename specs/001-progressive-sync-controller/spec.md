@@ -13,7 +13,7 @@
 ### Session 2026-09-15
 
 - Q: For the controller implementation, prefer Kubebuilder patterns or Argo CD-specific patterns? → A: Always prefer Kubebuilder (modern controller-runtime) patterns over Argo CD-specific/legacy ones. Argo CD conventions still govern the API surface (CRD grouping, Application integration, installation-id tenancy) and user-facing behavior, but implementation scaffolding, project layout, and controller idioms follow Kubebuilder. (Constitution amended to v1.1.0 accordingly.)
-- Q: When a new change arrives while a rollout is already in progress, what should the controller do? → A: Supersede — detect the new change candidate, wait for a configurable grace period, ensure the affected Applications have been refreshed by Argo CD, then supersede the in-flight rollout and restart from the first step (recording the prior rollout in history as `Superseded`). Mirrors the existing ApplicationSet progressive-sync behavior.
+- Q: When a new change arrives while a rollout is already in progress, what should the controller do? → A: Supersede — detect the new change candidate, wait a configurable grace period (to let Argo CD refresh the affected Applications on its own), then explicitly refresh any Applications still stale, and only once all affected Applications have been refreshed, supersede the in-flight rollout and restart from the first step (recording the prior rollout in history as `Superseded`). The wait is an implicit consequence of the "all refreshed" precondition, not a separate timeout. Mirrors the existing ApplicationSet progressive-sync behavior (`ensureApplicationsReconciled`).
 - Q: When a step's Applications never reach Synced + Healthy, how long does the controller wait? → A: Wait indefinitely. There is no separate "Paused" state, no step timeout, and no rollback — the rollout simply stays in progress on the current step until the success condition is met (or a new change supersedes it).
 - Q: What are the valid completion results for a rollout (history entry)? → A: Only `Completed` (all steps succeeded) or `Superseded` (a new change replaced the in-flight rollout). There is no `Aborted`/`Failed` result (consistent with no timeout/no rollback).
 - Q: What is the cross-namespace privilege boundary for selecting Applications in other namespaces? → A: A ProgressiveSync may select Applications in namespaces other than its own ONLY when it resides in the controller's own namespace. A ProgressiveSync in any other namespace is restricted to its own namespace; if it specifies a namespace selector, that is a configuration error — the controller sets a `ConfigurationError` condition (phase `Error`) and governs no Applications (fail-safe).
@@ -177,9 +177,10 @@ only that installation's Applications are governed and the others are excluded a
 - What happens when a stage never becomes healthy? The rollout waits on that stage indefinitely (no
   timeout, no rollback) and never proceeds until the stage's success condition is met.
 - How does the system handle a new change arriving while a rollout is already in progress? It
-  supersedes the in-flight rollout: after a configurable grace period and once the affected
-  Applications are refreshed by Argo CD, it supersedes the current rollout and restarts from the
-  first step (prior rollout recorded in history as `Superseded`).
+  supersedes the in-flight rollout and restarts from the first step (prior rollout recorded in
+  history as `Superseded`). It first waits a configurable grace period for Argo CD to refresh the
+  affected Applications on its own, then explicitly refreshes any that are still stale; the new
+  rollout begins only once all affected Applications have been refreshed.
 - How does the system handle two progressive sync resources whose selectors overlap on the same
   Application? Conflicting ownership must be detected and surfaced rather than silently fighting.
 - What happens when the controller lacks permission to read or act on an Application in a watched
@@ -232,10 +233,14 @@ only that installation's Applications are governed and the others are excluded a
 - **FR-015**: System MUST emit operational signals (events and metrics) sufficient to observe and
   troubleshoot rollouts.
 - **FR-016**: When a new change is detected for the governed Applications while a rollout is in
-  progress, the System MUST supersede the in-flight rollout: it MUST wait for a configurable grace
-  period and confirm the affected Applications have been refreshed by Argo CD before superseding the
-  current rollout and restarting from the first step, recording the prior rollout in history with
-  result `Superseded`.
+  progress, the System MUST supersede the in-flight rollout and restart from the first step,
+  recording the prior rollout in history with result `Superseded`. Before triggering an explicit
+  refresh, the System MUST wait a configurable grace period, giving Argo CD the opportunity to
+  refresh the affected Applications on its own; once the grace period elapses, the System MUST
+  explicitly trigger a refresh of any affected Application that has not been refreshed since the
+  change. The new rollout only begins once all affected Applications have been refreshed — whether
+  by Argo CD during the grace period or by the System's explicit refresh. This waiting is an implicit
+  consequence of that precondition, not a separate timeout or paused state.
 - **FR-017**: System MUST validate the Argo CD installation identity recorded on each candidate
   Application's metadata and include only Applications whose installation identity matches the Argo
   CD installation the controller is bound to.
